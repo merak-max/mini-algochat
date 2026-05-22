@@ -28,6 +28,18 @@ const craftNotes = [
   "Fallback-safe API flow",
 ];
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
+function getApiUrl(path) {
+  if (!apiBaseUrl) {
+    throw new Error(
+      "Backend not configured for this static build. Set VITE_API_BASE_URL to your deployed backend URL."
+    );
+  }
+
+  return `${apiBaseUrl}${path}`;
+}
+
 function createStarterChat(message = starterMessage) {
   return {
     id: Date.now(),
@@ -153,7 +165,7 @@ function App() {
   );
 
   async function getBotReply(messages) {
-    const response = await fetch("/api/chat", {
+    const response = await fetch(getApiUrl("/api/chat"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -193,7 +205,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/advice");
+      const response = await fetch(getApiUrl("/api/advice"));
       const data = await response.json();
 
       if (!response.ok) {
