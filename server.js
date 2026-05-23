@@ -10,37 +10,15 @@ const port = process.env.PORT || 8787;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function looksLikeUrl(value) {
-  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
-}
-
 function cleanEnv(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveOpenAIConfig() {
-  const keyCandidates = [
-    cleanEnv(process.env.OPENAI_API_KEY),
-    cleanEnv(process.env.OPENAI_API_URL),
-    cleanEnv(process.env.OPENAI_BASE_URL),
-  ];
-
-  const urlCandidates = [
-    cleanEnv(process.env.OPENAI_BASE_URL),
-    cleanEnv(process.env.OPENAI_API_URL),
-  ];
-
-  const apiKey = keyCandidates.find(function (value) {
-    return value && !looksLikeUrl(value);
-  });
-
-  const baseURL = urlCandidates.find(function (value) {
-    return value && looksLikeUrl(value);
-  });
-
   return {
-    apiKey,
-    baseURL,
+    apiKey: cleanEnv(process.env.OPENAI_API_KEY),
+    baseURL: cleanEnv(process.env.OPENAI_BASE_URL),
+    model: cleanEnv(process.env.OPENAI_MODEL) || "gpt-5.2",
   };
 }
 
@@ -76,7 +54,7 @@ function createFallbackReply(messages) {
 
   const text = lastUserMessage?.text?.trim() || "there";
 
-  return `I received: "${text}". The OpenAI SDK is running in local fallback mode because no valid key was accepted. Add OPENAI_API_KEY, or place the key in OPENAI_API_URL or OPENAI_BASE_URL if that is how this workspace is configured.`;
+  return `I received: "${text}". The OpenAI SDK is running in local fallback mode because no valid OPENAI_API_KEY was accepted on the backend.`;
 }
 
 function isAuthError(error) {
@@ -92,6 +70,10 @@ function normalizeMessages(messages) {
   });
 }
 
+app.get("/api/health", function (req, res) {
+  res.json({ ok: true });
+});
+
 app.post("/api/chat", async function (req, res) {
   const messages = Array.isArray(req.body.messages) ? req.body.messages : [];
 
@@ -105,7 +87,7 @@ app.post("/api/chat", async function (req, res) {
 
   try {
     const response = await client.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-5.2",
+      model: openAIConfig.model,
       instructions:
         "You are Mini AlgoChat, a precise AI tutor inside a calm minimalist chat workspace. Keep replies useful, concise, and beginner-friendly.",
       input: normalizeMessages(messages),
