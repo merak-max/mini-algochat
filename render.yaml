@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mini-algochat-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run server
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: OPENAI_MODEL
+        value: glm-5.1
+      - key: FRONTEND_ORIGIN
+        value: https://merak-max.github.io
