@@ -155,10 +155,22 @@ app.get("/api/advice", async function (req, res) {
   }
 });
 
-app.use(express.static(path.join(__dirname, "dist")));
+const distDir = path.join(__dirname, "dist");
+const pagesBase = "/mini-algochat";
+
+app.get("/", function (req, res) {
+  res.redirect(`${pagesBase}/`);
+});
+
+app.use(pagesBase, express.static(distDir));
+app.use(express.static(distDir, { index: false }));
+
+app.get(`${pagesBase}/*splat`, function (req, res) {
+  res.sendFile(path.join(distDir, "index.html"));
+});
 
 app.use(function (req, res) {
-  res.sendFile(path.join(__dirname, "dist", "index.html"));
+  res.sendFile(path.join(distDir, "index.html"));
 });
 
 app.listen(port, function () {
