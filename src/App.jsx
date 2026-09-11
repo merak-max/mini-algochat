@@ -3,11 +3,12 @@ import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./App.css";
+import { createStarterChat, readChats, messagesForApi, STORAGE_KEY } from "./chat-state.js";
+import { MAX_MESSAGE_LENGTH, validateMessages } from "../shared/chat.js";
+import { requestApi } from "./api.js";
+import MessageContent from "./MessageContent.jsx";
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
-
-const starterMessage =
-  "Welcome to Mini AlgoChat. Ask a question, shape an idea, or use a prepared prompt to begin.";
 
 const quickPrompts = [
   "Explain React like I am 12",
@@ -17,69 +18,65 @@ const quickPrompts = [
 ];
 
 const workspaceStats = [
-  { label: "Model", value: "OpenAI SDK" },
-  { label: "Context", value: "Local" },
+  { label: "History", value: "This browser" },
+  { label: "Assistant", value: "AI tutor" },
   { label: "Tone", value: "Calm" },
 ];
 
 const craftNotes = [
   "Minimal surfaces",
   "Fast local history",
-  "Fallback-safe API flow",
+  "Clear connection status",
 ];
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-
-function getApiUrl(path) {
-  if (!apiBaseUrl) {
-    throw new Error(
-      "Backend not configured for this static build. Set VITE_API_BASE_URL to your deployed backend URL."
-    );
-  }
-
-  return `${apiBaseUrl}${path}`;
-}
-
-function createStarterChat(message = starterMessage) {
-  return {
-    id: Date.now(),
-    title: "New Chat",
-    messages: [
-      {
-        sender: "bot",
-        text: message,
-      },
-    ],
-  };
-}
-
-function getSavedChats() {
+function loadInitialState() {
   try {
-    const savedChats = localStorage.getItem("mini-algochats");
-    return savedChats ? JSON.parse(savedChats) : null;
+    return { chats: readChats(localStorage), storageError: "" };
   } catch {
-    return null;
+    return {
+      chats: [createStarterChat()],
+      storageError: "Saved chats could not be loaded. Existing stored data has been left untouched; new changes will not be saved.",
+    };
   }
 }
 
 function App() {
   const shellRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const [chats, setChats] = useState(function () {
-    return getSavedChats() || [createStarterChat()];
-  });
-
-  const [activeChatId, setActiveChatId] = useState(function () {
-    const savedChats = getSavedChats();
-    return savedChats?.[0]?.id || null;
-  });
+  const [initialState] = useState(loadInitialState);
+  const [chats, setChats] = useState(initialState.chats);
+  const [activeChatId, setActiveChatId] = useState(initialState.chats[0]?.id || null);
+  const [storageError, setStorageError] = useState(initialState.storageError);
+  const [connection, setConnection] = useState("Checking backend…");
+  const [chatErrors, setChatErrors] = useState({});
+  const requestInFlight = useRef(false);
+  const [pendingChatId, setPendingChatId] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [inputText, setInputText] = useState("");
   const [searchText, setSearchText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
+  async function checkConnection() {
+    setConnection("Checking backend…");
+    try {
+      const data = await requestApi("/api/health");
+      if (typeof data.configured !== "boolean") throw new Error("Unexpected health response");
+      setConnection(data.configured ? "Provider configured · not verified" : "AI setup needed");
+    } catch {
+      setConnection("Backend unavailable");
+    }
+  }
+
+  useEffect(() => { checkConnection(); }, []);
+
+  function setChatError(chatId, error) {
+    setChatErrors((current) => ({ ...current, [chatId]: error }));
+  }
+
   useGSAP(
     function () {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       gsap.from(".sidebar-panel > *", {
         y: 18,
         opacity: 0,
@@ -112,9 +109,15 @@ function App() {
 
   useEffect(
     function () {
-      localStorage.setItem("mini-algochats", JSON.stringify(chats));
+      if (initialState.storageError) return;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
+        setStorageError("");
+      } catch {
+        setStorageError("Your browser could not save these changes. Keep this tab open to avoid losing them.");
+      }
     },
-    [chats]
+    [chats, initialState.storageError]
   );
 
   useEffect(
@@ -128,13 +131,16 @@ function App() {
 
   useEffect(
     function () {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      const container = messagesEndRef.current?.parentElement;
+      const hasUserMessages = chats.find((chat) => chat.id === activeChatId)?.messages.some((message) => message.sender === "user");
+      container?.scrollTo({ top: hasUserMessages ? container.scrollHeight : 0, behavior: "instant" });
     },
     [chats, activeChatId, isLoading]
   );
 
   useEffect(
     function () {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       const rows = shellRef.current?.querySelectorAll(".message-row");
       const lastRow = rows?.[rows.length - 1];
 
@@ -165,7 +171,7 @@ function App() {
   );
 
   async function getBotReply(messages) {
-    const response = await fetch(getApiUrl("/api/chat"), {
+    const data = await requestApi("/api/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -173,22 +179,20 @@ function App() {
       body: JSON.stringify({ messages }),
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "AI request failed.");
+    if (data.mode !== "openai" || typeof data.reply !== "string" || !data.reply.trim()) {
+      throw new Error("The backend did not return a genuine AI response. Check its configuration.");
     }
 
     return data.reply;
   }
 
-  function appendBotMessage(text) {
+  function appendBotMessage(chatId, text, kind = "message") {
     setChats(function (currentChats) {
       return currentChats.map(function (chat) {
-        if (chat.id === activeChatId) {
+        if (chat.id === chatId) {
           return {
             ...chat,
-            messages: [...chat.messages, { sender: "bot", text }],
+            messages: [...chat.messages, { sender: "bot", text, kind }],
           };
         }
 
@@ -198,44 +202,46 @@ function App() {
   }
 
   async function getRealApiAdvice() {
-    if (!activeChat || isLoading) {
+    if (!activeChat || requestInFlight.current) {
       return;
     }
 
+    requestInFlight.current = true;
     setIsLoading(true);
+    setPendingChatId(activeChatId);
+    setChatError(activeChatId, null);
 
     try {
-      const response = await fetch(getApiUrl("/api/advice"));
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Advice API request failed.");
-      }
-
-      appendBotMessage(`Real API advice: ${data.advice}`);
+      const data = await requestApi("/api/advice");
+      if (typeof data.advice !== "string") throw new Error("No advice was returned.");
+      appendBotMessage(activeChatId, `Random advice (not AI): ${data.advice}`, "notice");
     } catch (error) {
-      appendBotMessage(`Real API error: ${error.message}`);
+      setChatError(activeChatId, { text: error.message });
     } finally {
+      requestInFlight.current = false;
       setIsLoading(false);
+      setPendingChatId(null);
     }
   }
 
   function createNewChat() {
     const newChat = createStarterChat("A blank conversation is ready. What shall we refine first?");
 
-    setChats([newChat, ...chats]);
+    setChats((current) => [newChat, ...current]);
     setActiveChatId(newChat.id);
     setInputText("");
+    setSearchText("");
+    setSidebarOpen(false);
   }
 
-  async function sendMessage(customText) {
-    if (!activeChat || isLoading) {
+  async function sendMessage(customText, retry = false) {
+    if (!activeChat || requestInFlight.current) {
       return;
     }
 
     const trimmedInput = (customText || inputText).trim();
 
-    if (trimmedInput === "") {
+    if (!retry && trimmedInput === "") {
       return;
     }
 
@@ -244,18 +250,24 @@ function App() {
       text: trimmedInput,
     };
 
-    const messagesForApi = [...activeChat.messages, userMessage];
+    const updatedMessages = retry ? activeChat.messages : [...activeChat.messages, userMessage];
+    const apiMessages = messagesForApi(updatedMessages);
+    const validationError = validateMessages(apiMessages);
+    if (validationError) {
+      setChatError(activeChatId, { text: validationError });
+      return;
+    }
 
     setChats(function (currentChats) {
       return currentChats.map(function (chat) {
         if (chat.id === activeChatId) {
           const updatedTitle =
-            chat.title === "New Chat" ? trimmedInput.slice(0, 34) : chat.title;
+            chat.title === "New Chat" && !retry ? trimmedInput.slice(0, 34) : chat.title;
 
           return {
             ...chat,
             title: updatedTitle,
-            messages: messagesForApi,
+            messages: updatedMessages,
           };
         }
 
@@ -263,21 +275,28 @@ function App() {
       });
     });
 
-    setInputText("");
+    if (!retry) setInputText("");
+    requestInFlight.current = true;
     setIsLoading(true);
+    setPendingChatId(activeChatId);
+    setChatError(activeChatId, null);
 
     try {
-      const replyText = await getBotReply(messagesForApi);
-      appendBotMessage(replyText);
+      const replyText = await getBotReply(apiMessages);
+      appendBotMessage(activeChatId, replyText);
+      setConnection("AI reply verified this session");
     } catch (error) {
-      appendBotMessage(`Error: ${error.message}`);
+      setChatError(activeChatId, { text: error.message, retry: true });
+      setConnection("AI request failed · check setup");
     } finally {
+      requestInFlight.current = false;
       setIsLoading(false);
+      setPendingChatId(null);
     }
   }
 
   function handleKeyDown(event) {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       sendMessage();
     }
@@ -301,7 +320,10 @@ function App() {
       <div className="ambient ambient-two" />
       <div className="paper-grain" />
 
-      <aside className="sidebar-panel">
+      <button className="mobile-sidebar-toggle ghost-action" aria-expanded={sidebarOpen} aria-controls="conversations" onClick={() => setSidebarOpen(!sidebarOpen)}>
+        {sidebarOpen ? "Close conversations" : `Conversations (${chats.length})`}
+      </button>
+      <aside id="conversations" className={`sidebar-panel${sidebarOpen ? " is-open" : ""}`}>
         <div className="brand-mark">
           <div className="brand-symbol">M</div>
           <div>
@@ -352,6 +374,7 @@ function App() {
                     className="chat-title"
                     onClick={function () {
                       setActiveChatId(chat.id);
+                      setSidebarOpen(false);
                     }}
                   >
                     <span>{chat.title}</span>
@@ -375,12 +398,13 @@ function App() {
 
         <div className="craft-card">
           <span>API</span>
-          <strong>OpenAI SDK ready</strong>
-          <p>Reads OPENAI_API_KEY, OPENAI_API_URL, and OPENAI_BASE_URL with graceful fallback.</p>
+          <strong>{connection}</strong>
+          <p>Keys stay on the backend. Saved chats stay in this browser; sending a message shares conversation context with your AI provider.</p>
         </div>
       </aside>
 
       <section className="chat-panel">
+        {storageError && <p className="error-notice" role="alert">{storageError}</p>}
         {activeChat ? (
           <>
             <header className="topbar">
@@ -389,18 +413,18 @@ function App() {
                 <h1>{activeChat.title}</h1>
               </div>
               <div className="topbar-actions">
-                <div className="status-pill">
-                  <span />
-                  Live SDK route
+                <div className="status-pill" role="status">
+                  {connection}
                 </div>
+                <button className="ghost-action" onClick={checkConnection} disabled={isLoading}>Check connection</button>
                 <button className="ghost-action" onClick={getRealApiAdvice} disabled={isLoading}>
-                  Try Real API
+                  Random advice
                 </button>
               </div>
             </header>
 
             <div className="messages">
-              <section className="hero-card">
+              {!activeChat.messages.some((message) => message.sender === "user") && <section className="hero-card">
                 <div className="hero-copy">
                   <p className="quiet-label">Minimal assistant</p>
                   <h2>
@@ -438,7 +462,7 @@ function App() {
                     );
                   })}
                 </div>
-              </section>
+              </section>}
 
               <section className="craft-notes">
                 {craftNotes.map(function (note) {
@@ -454,13 +478,15 @@ function App() {
                       <div className="message-meta">
                         {message.sender === "user" ? "You" : "Mini AlgoChat"}
                       </div>
-                      <div className="message-bubble">{message.text}</div>
+                      <div className="message-bubble">
+                        <MessageContent text={message.text} markdown={message.sender === "bot"} />
+                      </div>
                     </div>
                   </div>
                 );
               })}
 
-              {isLoading && (
+              {isLoading && pendingChatId === activeChatId && (
                 <div className="message-row bot">
                   <div className="avatar">AI</div>
                   <div className="message-stack">
@@ -477,9 +503,15 @@ function App() {
             </div>
 
             <div className="composer-wrap">
+              {chatErrors[activeChatId] && <div className="error-notice" role="alert">
+                <p>{chatErrors[activeChatId].text}</p>
+                {chatErrors[activeChatId].retry && <button className="ghost-action" disabled={isLoading} onClick={() => sendMessage(undefined, true)}>Retry last message</button>}
+              </div>}
               <div className="composer">
                 <textarea
-                  placeholder="Write naturally. Press Enter to send."
+                  aria-label="Message"
+                  maxLength={MAX_MESSAGE_LENGTH}
+                  placeholder="Your message…"
                   value={inputText}
                   disabled={isLoading}
                   rows="1"
@@ -498,7 +530,7 @@ function App() {
                   {isLoading ? "Sending" : "Send"}
                 </button>
               </div>
-              <p className="composer-hint">Shift and Enter creates a new line</p>
+              <p className="composer-hint">Shift+Enter for a new line · {inputText.length}/{MAX_MESSAGE_LENGTH} characters</p>
             </div>
           </>
         ) : (

@@ -1,165 +1,114 @@
 import "dotenv/config";
 import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import OpenAI from "openai";
+import { validateMessages } from "./shared/chat.js";
 
-const app = express();
-const port = process.env.PORT || 8787;
+const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const cleanEnv = (value) => value?.trim() || undefined;
+const keylessGatewayEnabled = (env) => env.OPENAI_ALLOW_KEYLESS === "true" && Boolean(cleanEnv(env.OPENAI_BASE_URL));
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Constructing the app separately lets tests use an isolated, temporary port.
+export function createApp(env = process.env) {
+  const app = express();
+  const apiKey = cleanEnv(env.OPENAI_API_KEY);
+  const model = cleanEnv(env.OPENAI_MODEL) || "gpt-5.2";
+  const baseURL = cleanEnv(env.OPENAI_BASE_URL);
+  const keyless = keylessGatewayEnabled(env);
+  const client = apiKey || keyless
+    ? new OpenAI({
+        // The SDK requires a constructor key; the placeholder is never sent.
+        apiKey: keyless ? "keyless-gateway" : apiKey,
+        ...(baseURL ? { baseURL } : {}),
+        ...(keyless ? { defaultHeaders: { Authorization: null } } : {}),
+        timeout: 45_000, maxRetries: 0,
+      })
+    : null;
 
-function cleanEnv(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    // Same-origin local requests need no CORS. Cross-origin hosting is explicit.
+    if (env.FRONTEND_ORIGIN && req.headers.origin === env.FRONTEND_ORIGIN) {
+      res.setHeader("Access-Control-Allow-Origin", env.FRONTEND_ORIGIN);
+      res.vary("Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
+  app.use(express.json({ limit: "128kb" }));
+
+  app.get("/api/health", (_req, res) => {
+    // Configuration is present; a successful reply still needs verification.
+    res.json({ ok: true, configured: Boolean(client), model });
+  });
+
+  app.post("/api/chat", async (req, res) => {
+    const messages = req.body?.messages;
+    const error = validateMessages(messages);
+    if (error) return res.status(400).json({ error });
+    if (!client) {
+      return res.status(503).json({ error: "AI is not configured. Add your provider credentials to the server's .env file and restart it." });
+    }
+    try {
+      const response = await client.responses.create({
+        model,
+        instructions: "You are Mini AlgoChat, a precise AI tutor. Keep replies useful, concise, and beginner-friendly. Format code in fenced code blocks.",
+        max_output_tokens: 2048,
+        store: false,
+        input: messages.map((message) => ({ role: message.sender === "user" ? "user" : "assistant", content: message.text })),
+      });
+      if (!response.output_text?.trim()) return res.status(502).json({ error: "The AI returned no text. Please try again." });
+      res.json({ reply: response.output_text, mode: "openai" });
+    } catch (error) {
+      // Don't expose provider internals, credentials, or conversation content.
+      if (error.status === 401 || error.status === 403) {
+        return res.status(502).json({ error: "The AI provider rejected the server credentials. Check the backend configuration." });
+      }
+      if (error.status === 429) {
+        return res.status(429).json({ error: "The AI provider's usage limit was reached. Check your quota or try again later." });
+      }
+      if (error.name === "APIConnectionTimeoutError") {
+        return res.status(504).json({ error: "The AI provider took too long to respond. Please try again." });
+      }
+      res.status(502).json({ error: "The AI provider could not complete the request. Check the backend URL and model, then try again." });
+    }
+  });
+
+  app.get("/api/advice", async (_req, res) => {
+    try {
+      const response = await fetch("https://api.adviceslip.com/advice", {
+        headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error("Advice unavailable");
+      const data = await response.json();
+      if (typeof data?.slip?.advice !== "string") throw new Error("Invalid advice");
+      res.json({ advice: data.slip.advice });
+    } catch {
+      res.status(502).json({ error: "Random advice is unavailable right now. Please try again later." });
+    }
+  });
+
+  app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
+  const distDir = path.join(projectDir, "dist");
+  app.get("/", (_req, res) => res.redirect("/mini-algochat/"));
+  app.use("/mini-algochat", express.static(distDir));
+  app.get("/mini-algochat/*splat", (_req, res) => res.sendFile(path.join(distDir, "index.html")));
+  app.use((error, _req, res, _next) => {
+    if (error.type === "entity.too.large") return res.status(413).json({ error: "This conversation is too large. Start a new chat." });
+    if (error.type === "entity.parse.failed") return res.status(400).json({ error: "The request must contain valid JSON." });
+    res.status(error.status === 404 ? 404 : 500).json({ error: "Request unavailable. For the frontend, run npm run client or build it first." });
+  });
+  return app;
 }
 
-function resolveOpenAIConfig() {
-  return {
-    apiKey: cleanEnv(process.env.OPENAI_API_KEY),
-    baseURL: cleanEnv(process.env.OPENAI_BASE_URL),
-    model: cleanEnv(process.env.OPENAI_MODEL) || "gpt-5.2",
-  };
-}
-
-const openAIConfig = resolveOpenAIConfig();
-const client = openAIConfig.apiKey
-  ? new OpenAI({
-      apiKey: openAIConfig.apiKey,
-      ...(openAIConfig.baseURL ? { baseURL: openAIConfig.baseURL } : {}),
-    })
-  : null;
-
-app.use(function (req, res, next) {
-  const allowedOrigin = process.env.FRONTEND_ORIGIN || "*";
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
-  next();
-});
-
-app.use(express.json({ limit: "1mb" }));
-
-function createFallbackReply(messages) {
-  const lastUserMessage = [...messages]
-    .reverse()
-    .find(function (message) {
-      return message.sender === "user";
-    });
-
-  const text = lastUserMessage?.text?.trim() || "there";
-
-  return `I received: "${text}". The OpenAI SDK is running in local fallback mode because no valid OPENAI_API_KEY was accepted on the backend.`;
-}
-
-function isAuthError(error) {
-  return error.status === 401 || error.code === "invalid_api_key";
-}
-
-function normalizeMessages(messages) {
-  return messages.map(function (message) {
-    return {
-      role: message.sender === "user" ? "user" : "assistant",
-      content: String(message.text || ""),
-    };
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const host = process.env.HOST || "127.0.0.1";
+  const port = process.env.PORT || 8787;
+  createApp().listen(port, host, () => {
+    console.log(`Mini AlgoChat server running on http://${host}:${port}`);
+    console.log(cleanEnv(process.env.OPENAI_API_KEY) || keylessGatewayEnabled(process.env) ? "Provider configured (not yet verified)" : "AI not configured; add server credentials to .env");
   });
 }
-
-app.get("/api/health", function (req, res) {
-  res.json({ ok: true });
-});
-
-app.post("/api/chat", async function (req, res) {
-  const messages = Array.isArray(req.body.messages) ? req.body.messages : [];
-
-  if (messages.length === 0) {
-    return res.status(400).json({ error: "No messages were sent." });
-  }
-
-  if (!client) {
-    return res.json({ reply: createFallbackReply(messages), mode: "fallback" });
-  }
-
-  try {
-    const response = await client.responses.create({
-      model: openAIConfig.model,
-      instructions:
-        "You are Mini AlgoChat, a precise AI tutor inside a calm minimalist chat workspace. Keep replies useful, concise, and beginner-friendly.",
-      input: normalizeMessages(messages),
-    });
-
-    res.json({ reply: response.output_text || "I could not create a reply.", mode: "openai" });
-  } catch (error) {
-    console.error(error);
-
-    if (isAuthError(error)) {
-      return res.json({ reply: createFallbackReply(messages), mode: "fallback" });
-    }
-
-    res.status(500).json({
-      error: error.message || "Something went wrong while calling the AI API.",
-    });
-  }
-});
-
-app.get("/api/advice", async function (req, res) {
-  try {
-    const response = await fetch("https://api.adviceslip.com/advice", {
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: "Advice API request failed.",
-      });
-    }
-
-    const data = await response.json();
-    const advice = data?.slip?.advice;
-
-    if (!advice) {
-      return res.status(502).json({ error: "Advice API returned no advice." });
-    }
-
-    res.json({ advice });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      error: error.message || "Something went wrong while calling the advice API.",
-    });
-  }
-});
-
-const distDir = path.join(__dirname, "dist");
-const pagesBase = "/mini-algochat";
-
-app.get("/", function (req, res) {
-  res.redirect(`${pagesBase}/`);
-});
-
-app.use(pagesBase, express.static(distDir));
-app.use(express.static(distDir, { index: false }));
-
-app.get(`${pagesBase}/*splat`, function (req, res) {
-  res.sendFile(path.join(distDir, "index.html"));
-});
-
-app.use(function (req, res) {
-  res.sendFile(path.join(distDir, "index.html"));
-});
-
-app.listen(port, function () {
-  console.log(`Mini AlgoChat server running on http://localhost:${port}`);
-  console.log(
-    client
-      ? `OpenAI SDK active${openAIConfig.baseURL ? ` with baseURL ${openAIConfig.baseURL}` : ""}`
-      : "OpenAI SDK fallback mode active"
-  );
-});

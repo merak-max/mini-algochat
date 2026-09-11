@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "dev": "concurrently --kill-others \"npm run server\" \"npm run client\"",
     "client": "vite",
     "server": "node server.js",
     "build": "vite build",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "playwright test",
+    "check": "npm test && npm run build",
     "preview": "npm run build && npm run server",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
@@ -19,12 +22,14 @@
     "express": "^5.2.1",
     "gsap": "^3.15.0",
     "openai": "^6.39.0",
-    "react": "latest",
-    "react-dom": "latest"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
+    "@playwright/test": "^1.63.0",
+    "@vitejs/plugin-react": "^6.0.0",
     "gh-pages": "^6.3.0",
-    "vite": "latest"
+    "vite": "^8.0.13"
   }
 }

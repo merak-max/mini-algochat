@@ -5,8 +5,10 @@ export default defineConfig({
   plugins: [react()],
   base: "/mini-algochat/",
   server: {
+    host: "127.0.0.1",
+    strictPort: true,
     proxy: {
-      "/api": "http://localhost:8787",
+      "/api": "http://127.0.0.1:8787",
     },
   },
 });
