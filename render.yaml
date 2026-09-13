@@ -6,6 +6,8 @@ services:
     buildCommand: npm ci
     startCommand: npm run server
     envVars:
+      - key: HOST
+        value: 0.0.0.0
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_BASE_URL
