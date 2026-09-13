@@ -6,6 +6,7 @@
 - Added a current desktop application screenshot and a Mermaid request-flow diagram.
 - Added GitHub Actions continuous integration for unit/integration tests, the production build and Playwright browser tests.
 - Updated the Pages workflow to run the verified test-and-build command before deployment.
+- Updated the workflow actions to their current Node.js 24-based major versions after GitHub flagged the older Node.js 20 action runtime.
 - Verification: 16 Node.js tests, 11 Playwright tests, production build and `git diff --check` passed.
 
 ## 2026-09-11 — GitHub checkpoint
