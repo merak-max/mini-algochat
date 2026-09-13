@@ -1,6 +1,21 @@
 # Mini AlgoChat
 
-A small React chat app with an Express backend. Build and understand it locally first; hosting comes later.
+A focused full-stack AI chat application built with React, Express, and the official OpenAI SDK. It demonstrates secure server-side provider access, browser-local conversation history, defensive validation, responsive design, and automated testing.
+
+[Live frontend](https://merak-max.github.io/mini-algochat/) · [Source code](https://github.com/merak-max/mini-algochat)
+
+![Mini AlgoChat application preview](docs/mini-algochat-preview.png)
+
+> The public GitHub Pages demo hosts the frontend only. AI replies require a separately configured backend; API keys are never placed in frontend code or GitHub Pages.
+
+## Highlights
+
+- Full conversation workflow with create, search, switch, retry, and delete actions.
+- Server-side OpenAI-compatible provider integration without exposing credentials to the browser.
+- Markdown replies, code formatting, copy controls, clear connection status, and honest failure states.
+- Shared frontend/backend validation with bounded message and context sizes.
+- Responsive navigation, keyboard focus states, and reduced-motion support.
+- Unit, integration, and Playwright browser tests using an isolated simulated provider.
 
 ## How it works
 
@@ -12,6 +27,15 @@ Your browser → Express backend → your AI provider → backend → browser.
 - **Git/GitHub** track the source code. They are separate from the running application.
 
 Saving history locally does not mean AI inference is local: sending a message sends its conversation context to the configured provider. Do not enter sensitive information unnecessarily.
+
+```mermaid
+flowchart LR
+  Browser[React browser app] -->|JSON over HTTPS| API[Express API]
+  API -->|Responses API| Provider[OpenAI-compatible provider]
+  Provider --> API
+  API --> Browser
+  Browser --> Storage[(Browser localStorage)]
+```
 
 ## Run locally
 
@@ -84,7 +108,7 @@ npm audit
 | `test/` | Automated checks and simulated-provider fixtures |
 | `CHANGELOG.md` | Work completed, verification and remaining tasks |
 
-## Production preview and future hosting
+## Production preview and hosting
 
 ```sh
 npm run preview
@@ -92,6 +116,6 @@ npm run preview
 
 This builds the frontend and serves it with Express at `http://127.0.0.1:8787/mini-algochat/`. A blank `VITE_API_BASE_URL` works because frontend and API share one origin.
 
-The existing GitHub Pages workflow and Render blueprint are retained, but no deployment is part of this local-first work. GitHub Pages cannot run Express; if used later, it requires a separately hosted backend URL in the build-time `VITE_API_BASE_URL` repository variable. Cross-origin hosting requires the exact frontend origin in `FRONTEND_ORIGIN`. Render explicitly binds `HOST=0.0.0.0`; local startup defaults to loopback only.
+GitHub Pages currently deploys the static frontend from `main`. GitHub Pages cannot run Express, so production AI features require a separately hosted backend URL in the build-time `VITE_API_BASE_URL` repository variable. Cross-origin hosting requires the exact frontend origin in `FRONTEND_ORIGIN`. The included Render blueprint binds the hosted backend to `0.0.0.0`; local startup defaults to loopback only.
 
 **Do not expose this backend publicly yet.** Authentication/access control, rate limiting, spending controls and hosting hardening remain future work. CORS is not authentication. Deployment architecture and credentials must be agreed before publishing.

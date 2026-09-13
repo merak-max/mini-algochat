@@ -1,5 +1,13 @@
 # Change log
 
+## 2026-09-13 — Public repository polish
+
+- Reframed the README around the product, its architecture, verified capabilities and public frontend limitations.
+- Added a current desktop application screenshot and a Mermaid request-flow diagram.
+- Added GitHub Actions continuous integration for unit/integration tests, the production build and Playwright browser tests.
+- Updated the Pages workflow to run the verified test-and-build command before deployment.
+- Verification: 16 Node.js tests, 11 Playwright tests, production build and `git diff --check` passed.
+
 ## 2026-09-11 — GitHub checkpoint
 
 - User authorized committing and pushing the completed project work on `improve/local-chat-foundation`; no merge to `main` or deployment requested.
